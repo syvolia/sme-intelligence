@@ -1,6 +1,23 @@
+# dbt profiles for the SME Intelligence project.
+#
+# Two targets:
+#   dev — local Docker Postgres (no SSL)
+#   ci  — Neon or any remote Postgres (SSL required)
+#
+# Target selection:
+#   export DBT_TARGET=ci   # or dev
+#   dbt run --profiles-dir .
+#
+# All connection values come from env vars so nothing is committed.
+# Locally, docker-compose provides defaults.
+# In CI, GitHub Actions secrets provide the values.
+
 sme_intelligence:
-  target: dev
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
   outputs:
+    # ---------------------------------------------------------------------
+    # Local development — Docker Compose Postgres
+    # ---------------------------------------------------------------------
     dev:
       type: postgres
       host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
@@ -11,3 +28,18 @@ sme_intelligence:
       schema: analytics
       threads: 4
       keepalives_idle: 0
+
+    # ---------------------------------------------------------------------
+    # CI / remote — Neon, Render, or any hosted Postgres
+    # ---------------------------------------------------------------------
+    ci:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST') }}"
+      port: "{{ env_var('POSTGRES_PORT_INTERNAL', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      pass: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('POSTGRES_DB') }}"
+      schema: analytics
+      threads: 4
+      keepalives_idle: 0
+      sslmode: require

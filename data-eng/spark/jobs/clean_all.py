@@ -24,9 +24,10 @@ POSTGRES_PORT = os.environ.get("POSTGRES_PORT_INTERNAL", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "sme_oltp")
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "sme")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "sme")
+POSTGRES_SSLMODE = os.environ.get("POSTGRES_SSLMODE", "").strip()
 
-JDBC = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-PROPS = {"user": POSTGRES_USER, "password": POSTGRES_PASSWORD, "driver": "org.postgresql.Driver"}
+_ssl_suffix = f"?sslmode={POSTGRES_SSLMODE}" if POSTGRES_SSLMODE else ""
+JDBC = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}{_ssl_suffix}"
 
 
 def read(spark, table: str):
