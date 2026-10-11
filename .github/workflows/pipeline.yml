@@ -25,11 +25,15 @@ permissions:
   contents: read
 
 jobs:
+  # =========================================================================
+  # Spark: public.* → curated.*
+  # =========================================================================
   spark:
     name: Spark cleaning (public → curated)
     if: ${{ github.event_name == 'schedule' || inputs.run_spark }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,9 +49,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install Spark and Postgres driver
+      - name: Install Spark and Postgres JDBC driver
         run: |
-          pip install pyspark==3.5.1
+          pip install --no-cache-dir pyspark==3.5.1
           curl -fsSL -o /tmp/postgresql.jar \
             https://jdbc.postgresql.org/download/postgresql-42.7.3.jar
 
@@ -66,12 +70,21 @@ jobs:
             --jars /tmp/postgresql.jar \
             data-eng/spark/jobs/clean_all.py
 
+  # =========================================================================
+  # dbt: curated.* → analytics.*
+  # =========================================================================
   dbt:
     name: dbt models + tests (curated → analytics)
     needs: [spark]
-    if: ${{ always() && (needs.spark.result == 'success' || needs.spark.result == 'skipped') && (github.event_name == 'schedule' || inputs.run_dbt) }}
+    if: >-
+      ${{
+        always()
+        && (needs.spark.result == 'success' || needs.spark.result == 'skipped')
+        && (github.event_name == 'schedule' || inputs.run_dbt)
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -79,10 +92,50 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install dbt
-        run: pip install dbt-postgres==1.8.2
+      - name: Remove any preinstalled dbt binaries
+        run: |
+          # dbt-oss (Fusion) ships a `dbt` entry point that shadows the
+          # classic CLI. Remove anything that might be on PATH before we
+          # install the classic line.
+          pip uninstall -y dbt dbt-oss dbt-core dbt-postgres dbt-adapters \
+            2>/dev/null || true
+
+      - name: Install classic dbt (core 1.8.2 + postgres adapter)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir --force-reinstall \
+            "dbt-core==1.8.2" \
+            "dbt-postgres==1.8.2"
+
+      - name: Verify dbt is the classic engine
+        run: |
+          echo "--- which dbt ---"
+          which dbt
+          echo
+          echo "--- dbt --version ---"
+          dbt --version
+          echo
+
+          # Fail fast if Fusion somehow won the PATH battle.
+          if dbt --version | grep -qiE "dbt-oss|fusion"; then
+            echo "❌ Wrong dbt binary — Fusion engine detected"
+            exit 1
+          fi
+
+          # Confirm the postgres adapter is registered.
+          if ! dbt --version | grep -qi "postgres"; then
+            echo "❌ dbt-postgres adapter not installed"
+            exit 1
+          fi
+
+          # Sanity-check the version starts with 1.
+          if ! dbt --version | grep -qE "installed: 1\."; then
+            echo "❌ Expected dbt-core 1.x — got something else"
+            exit 1
+          fi
+
+          echo "✅ Classic dbt-core 1.x with postgres adapter"
 
       - name: dbt deps
         working-directory: data-eng/dbt
@@ -91,6 +144,7 @@ jobs:
       - name: dbt run
         working-directory: data-eng/dbt
         env:
+          DBT_TARGET: ci
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
@@ -102,6 +156,7 @@ jobs:
       - name: dbt test
         working-directory: data-eng/dbt
         env:
+          DBT_TARGET: ci
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
