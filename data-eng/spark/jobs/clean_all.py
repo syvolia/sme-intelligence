@@ -5,11 +5,21 @@ Reads OLTP tables from `public.*`, applies light cleaning, writes to
 `curated.*`. Downstream, dbt staging reads from `curated.*` (via the
 `source_schema` dbt var) instead of `public.*`.
 
-    spark-submit \
+Local (inside the spark container):
+    /opt/spark/bin/spark-submit \
+      --master 'local[*]' \
       --jars /opt/spark/jars/postgresql-42.7.3.jar \
       /opt/spark/work-dir/jobs/clean_all.py
+
+CI (GitHub Actions):
+    spark-submit \
+      --master 'local[2]' \
+      --driver-memory 2g \
+      --jars /tmp/postgresql.jar \
+      data-eng/spark/jobs/clean_all.py
 """
 import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -19,18 +29,36 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+
+# ---------------------------------------------------------------------------
+# Connection configuration
+# ---------------------------------------------------------------------------
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "postgres")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT_INTERNAL", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "sme_oltp")
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "sme")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "sme")
+
+# Optional — set to "require" for Neon / hosted Postgres. Empty means no
+# sslmode parameter is appended to the JDBC URL (local Docker Postgres).
 POSTGRES_SSLMODE = os.environ.get("POSTGRES_SSLMODE", "").strip()
 
 _ssl_suffix = f"?sslmode={POSTGRES_SSLMODE}" if POSTGRES_SSLMODE else ""
 JDBC = f"jdbc:postgresql://{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}{_ssl_suffix}"
 
+# Spark JDBC connection properties. The driver class must be on the
+# spark-submit classpath (via --jars).
+PROPS = {
+    "user": POSTGRES_USER,
+    "password": POSTGRES_PASSWORD,
+    "driver": "org.postgresql.Driver",
+}
 
-def read(spark, table: str):
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+def read(spark: SparkSession, table: str):
     return spark.read.jdbc(JDBC, f"public.{table}", properties=PROPS)
 
 
@@ -42,6 +70,9 @@ def write(df, table: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main() -> None:
     spark = (
         SparkSession.builder.appName("sme-clean-all")
