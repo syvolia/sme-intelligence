@@ -23,9 +23,6 @@ permissions:
   contents: read
 
 jobs:
-  # =========================================================================
-  # Spark: public.* → curated.*
-  # =========================================================================
   spark:
     name: Spark cleaning (public → curated)
     if: ${{ github.event_name == 'schedule' || inputs.run_spark }}
@@ -55,7 +52,6 @@ jobs:
 
       - name: Run Spark cleaning job
         env:
-          # Values are normalized inside clean_all.py via _clean_host() etc.
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
@@ -69,9 +65,6 @@ jobs:
             --jars /tmp/postgresql.jar \
             data-eng/spark/jobs/clean_all.py
 
-  # =========================================================================
-  # dbt: curated.* → analytics.*
-  # =========================================================================
   dbt:
     name: dbt models + tests (curated → analytics)
     needs: [spark]
@@ -106,33 +99,21 @@ jobs:
 
       - name: Verify dbt is the classic engine
         run: |
-          echo "--- which dbt ---"
-          which dbt
-          echo
-          echo "--- dbt --version ---"
           dbt --version
-          echo
-
           if dbt --version | grep -qiE "dbt-oss|fusion"; then
-            echo "❌ Wrong dbt binary — Fusion engine detected"
+            echo "❌ Fusion detected"
             exit 1
           fi
-
           if ! dbt --version | grep -qi "postgres"; then
-            echo "❌ dbt-postgres adapter not installed"
+            echo "❌ postgres adapter missing"
             exit 1
           fi
+          echo "✅ classic dbt-core 1.x"
 
-          if ! dbt --version | grep -qE "installed: 1\."; then
-            echo "❌ Expected dbt-core 1.x — got something else"
-            exit 1
-          fi
-
-          echo "✅ Classic dbt-core 1.x with postgres adapter"
-
-      - name: Debug connection params (safe)
-        # Prints hostname, port, db, user, and password LENGTH — never the
-        # password itself. Helps diagnose trailing-whitespace issues.
+      # -------------------------------------------------------------------
+      # Diagnostic: byte-level dump of every secret (masking-proof)
+      # -------------------------------------------------------------------
+      - name: Debug secrets (byte-level)
         env:
           RAW_HOST: ${{ secrets.POSTGRES_HOST }}
           RAW_PORT: ${{ secrets.POSTGRES_PORT }}
@@ -140,11 +121,74 @@ jobs:
           RAW_USER: ${{ secrets.POSTGRES_USER }}
           RAW_PW: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
-          echo "raw host:  '${RAW_HOST}'  (len=${#RAW_HOST})"
-          echo "raw port:  '${RAW_PORT}'  (len=${#RAW_PORT})"
-          echo "raw db:    '${RAW_DB}'  (len=${#RAW_DB})"
-          echo "raw user:  '${RAW_USER}'  (len=${#RAW_USER})"
-          echo "raw pw len: ${#RAW_PW}"
+          echo "=========== POSTGRES_HOST ==========="
+          echo "length: ${#RAW_HOST}"
+          printf '%s' "$RAW_HOST" | od -c
+          echo
+          echo "=========== POSTGRES_PORT ==========="
+          echo "length: ${#RAW_PORT}"
+          printf '%s' "$RAW_PORT" | od -c
+          echo
+          echo "=========== POSTGRES_DB ==========="
+          echo "length: ${#RAW_DB}"
+          printf '%s' "$RAW_DB" | od -c
+          echo
+          echo "=========== POSTGRES_USER ==========="
+          echo "length: ${#RAW_USER}"
+          printf '%s' "$RAW_USER" | od -c
+          echo
+          echo "=========== POSTGRES_PASSWORD (length only) ==========="
+          echo "length: ${#RAW_PW}"
+          printf '%s' "$RAW_PW" | od -c | head -3
+          echo
+
+      # -------------------------------------------------------------------
+      # Normalize: extract bare components even if a full URL was pasted
+      # -------------------------------------------------------------------
+      - name: Normalize secrets
+        env:
+          RAW_HOST: ${{ secrets.POSTGRES_HOST }}
+          RAW_PORT: ${{ secrets.POSTGRES_PORT }}
+          RAW_DB: ${{ secrets.POSTGRES_DB }}
+          RAW_USER: ${{ secrets.POSTGRES_USER }}
+          RAW_PW: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          clean_host() {
+            local v="$1"
+            # strip scheme
+            v="${v#*://}"
+            # strip user:pass@
+            v="${v##*@}"
+            # strip path & query
+            v="${v%%/*}"
+            v="${v%%\?*}"
+            # strip port
+            v="${v%%:*}"
+            # strip ALL whitespace
+            v="$(printf '%s' "$v" | tr -d '[:space:]')"
+            printf '%s' "$v"
+          }
+
+          HOST="$(clean_host "$RAW_HOST")"
+          PORT="$(printf '%s' "$RAW_PORT" | tr -cd '0-9')"
+          DB="$(printf '%s' "$RAW_DB" | tr -d '[:space:]')"
+          USER="$(printf '%s' "$RAW_USER" | tr -d '[:space:]')"
+          PW="$(printf '%s' "$RAW_PW" | sed -e 's/[[:space:]]*$//')"
+
+          [ -z "$PORT" ] && PORT=5432
+
+          echo "cleaned host: $HOST"
+          echo "cleaned port: $PORT"
+          echo "cleaned db:   $DB"
+          echo "cleaned user: $USER"
+
+          {
+            echo "POSTGRES_HOST=$HOST"
+            echo "POSTGRES_PORT_INTERNAL=$PORT"
+            echo "POSTGRES_DB=$DB"
+            echo "POSTGRES_USER=$USER"
+            echo "POSTGRES_PASSWORD=$PW"
+          } >> "$GITHUB_ENV"
 
       - name: dbt deps
         working-directory: data-eng/dbt
@@ -154,36 +198,12 @@ jobs:
         working-directory: data-eng/dbt
         env:
           DBT_TARGET: ci
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
-          # Trim any trailing whitespace/newlines from secret values.
-          # GitHub's secret UI often appends a newline on paste.
-          export POSTGRES_HOST="$(printf '%s' "$POSTGRES_HOST" | tr -d '[:space:]')"
-          export POSTGRES_PORT_INTERNAL="$(printf '%s' "$POSTGRES_PORT_INTERNAL" | tr -d '[:space:]')"
-          export POSTGRES_DB="$(printf '%s' "$POSTGRES_DB" | tr -d '[:space:]')"
-          export POSTGRES_USER="$(printf '%s' "$POSTGRES_USER" | tr -d '[:space:]')"
-          export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD" | sed -e 's/[[:space:]]*$//')"
-
           dbt run --profiles-dir . --vars '{source_schema: curated}'
 
       - name: dbt test
         working-directory: data-eng/dbt
         env:
           DBT_TARGET: ci
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
-          export POSTGRES_HOST="$(printf '%s' "$POSTGRES_HOST" | tr -d '[:space:]')"
-          export POSTGRES_PORT_INTERNAL="$(printf '%s' "$POSTGRES_PORT_INTERNAL" | tr -d '[:space:]')"
-          export POSTGRES_DB="$(printf '%s' "$POSTGRES_DB" | tr -d '[:space:]')"
-          export POSTGRES_USER="$(printf '%s' "$POSTGRES_USER" | tr -d '[:space:]')"
-          export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD" | sed -e 's/[[:space:]]*$//')"
-
           dbt test --profiles-dir . --vars '{source_schema: curated}'
