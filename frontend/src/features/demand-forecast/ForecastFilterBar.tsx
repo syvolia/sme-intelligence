@@ -1,7 +1,6 @@
 import {
   Autocomplete,
   Box,
-  Button,
   Card,
   Chip,
   Stack,
@@ -64,8 +63,8 @@ export function ForecastFilterBar({
           label="Location"
           value={filters.location_id}
           onChange={(e) => onChange({ location_id: e.target.value })}
-          InputLabelProps={{ shrink: true }}
           SelectProps={{ native: true }}
+          InputLabelProps={{ shrink: true }}
           sx={{ minWidth: 180 }}
         >
           <option value="">Select a branch…</option>
