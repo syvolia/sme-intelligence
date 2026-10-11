@@ -1,0 +1,25 @@
+name: sme_intelligence
+version: '1.0.0'
+config-version: 2
+profile: sme_intelligence
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+models:
+  sme_intelligence:
+    staging:
+      +materialized: view
+      +tags: ['staging']
+    marts:
+      dims:
+        +materialized: table
+        +tags: ['dim', 'marts']
+      facts:
+        +materialized: table
+        +tags: ['fact', 'marts']
+      +materialized: table
+      +tags: ['marts']
