@@ -1,7 +1,6 @@
 name: Data Pipeline
 
 on:
-  # Manual trigger from the GitHub Actions UI
   workflow_dispatch:
     inputs:
       run_spark:
@@ -13,7 +12,6 @@ on:
         type: boolean
         default: true
 
-  # Daily at 03:00 UTC (06:00 Nairobi)
   schedule:
     - cron: "0 3 * * *"
 
@@ -57,6 +55,7 @@ jobs:
 
       - name: Run Spark cleaning job
         env:
+          # Values are normalized inside clean_all.py via _clean_host() etc.
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT_INTERNAL: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
@@ -95,9 +94,6 @@ jobs:
 
       - name: Remove any preinstalled dbt binaries
         run: |
-          # dbt-oss (Fusion) ships a `dbt` entry point that shadows the
-          # classic CLI. Remove anything that might be on PATH before we
-          # install the classic line.
           pip uninstall -y dbt dbt-oss dbt-core dbt-postgres dbt-adapters \
             2>/dev/null || true
 
@@ -117,25 +113,38 @@ jobs:
           dbt --version
           echo
 
-          # Fail fast if Fusion somehow won the PATH battle.
           if dbt --version | grep -qiE "dbt-oss|fusion"; then
             echo "❌ Wrong dbt binary — Fusion engine detected"
             exit 1
           fi
 
-          # Confirm the postgres adapter is registered.
           if ! dbt --version | grep -qi "postgres"; then
             echo "❌ dbt-postgres adapter not installed"
             exit 1
           fi
 
-          # Sanity-check the version starts with 1.
           if ! dbt --version | grep -qE "installed: 1\."; then
             echo "❌ Expected dbt-core 1.x — got something else"
             exit 1
           fi
 
           echo "✅ Classic dbt-core 1.x with postgres adapter"
+
+      - name: Debug connection params (safe)
+        # Prints hostname, port, db, user, and password LENGTH — never the
+        # password itself. Helps diagnose trailing-whitespace issues.
+        env:
+          RAW_HOST: ${{ secrets.POSTGRES_HOST }}
+          RAW_PORT: ${{ secrets.POSTGRES_PORT }}
+          RAW_DB: ${{ secrets.POSTGRES_DB }}
+          RAW_USER: ${{ secrets.POSTGRES_USER }}
+          RAW_PW: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          echo "raw host:  '${RAW_HOST}'  (len=${#RAW_HOST})"
+          echo "raw port:  '${RAW_PORT}'  (len=${#RAW_PORT})"
+          echo "raw db:    '${RAW_DB}'  (len=${#RAW_DB})"
+          echo "raw user:  '${RAW_USER}'  (len=${#RAW_USER})"
+          echo "raw pw len: ${#RAW_PW}"
 
       - name: dbt deps
         working-directory: data-eng/dbt
@@ -151,6 +160,14 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
+          # Trim any trailing whitespace/newlines from secret values.
+          # GitHub's secret UI often appends a newline on paste.
+          export POSTGRES_HOST="$(printf '%s' "$POSTGRES_HOST" | tr -d '[:space:]')"
+          export POSTGRES_PORT_INTERNAL="$(printf '%s' "$POSTGRES_PORT_INTERNAL" | tr -d '[:space:]')"
+          export POSTGRES_DB="$(printf '%s' "$POSTGRES_DB" | tr -d '[:space:]')"
+          export POSTGRES_USER="$(printf '%s' "$POSTGRES_USER" | tr -d '[:space:]')"
+          export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD" | sed -e 's/[[:space:]]*$//')"
+
           dbt run --profiles-dir . --vars '{source_schema: curated}'
 
       - name: dbt test
@@ -163,4 +180,10 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
+          export POSTGRES_HOST="$(printf '%s' "$POSTGRES_HOST" | tr -d '[:space:]')"
+          export POSTGRES_PORT_INTERNAL="$(printf '%s' "$POSTGRES_PORT_INTERNAL" | tr -d '[:space:]')"
+          export POSTGRES_DB="$(printf '%s' "$POSTGRES_DB" | tr -d '[:space:]')"
+          export POSTGRES_USER="$(printf '%s' "$POSTGRES_USER" | tr -d '[:space:]')"
+          export POSTGRES_PASSWORD="$(printf '%s' "$POSTGRES_PASSWORD" | sed -e 's/[[:space:]]*$//')"
+
           dbt test --profiles-dir . --vars '{source_schema: curated}'

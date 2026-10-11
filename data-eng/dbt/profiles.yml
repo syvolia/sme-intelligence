@@ -9,22 +9,23 @@
 #   dbt run --profiles-dir .
 #
 # All connection values come from env vars so nothing is committed.
-# Locally, docker-compose provides defaults.
-# In CI, GitHub Actions secrets provide the values.
+# The `| trim` filter is load-bearing: GitHub Actions secrets often carry a
+# trailing newline, and Postgres will refuse to resolve a hostname ending
+# in whitespace.
 
 sme_intelligence:
-  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  target: "{{ env_var('DBT_TARGET', 'dev') | trim }}"
   outputs:
     # ---------------------------------------------------------------------
     # Local development — Docker Compose Postgres
     # ---------------------------------------------------------------------
     dev:
       type: postgres
-      host: "{{ env_var('POSTGRES_HOST', 'postgres') }}"
-      port: "{{ env_var('POSTGRES_PORT_INTERNAL', '5432') | int }}"
-      user: "{{ env_var('POSTGRES_USER', 'sme') }}"
-      pass: "{{ env_var('POSTGRES_PASSWORD', 'sme') }}"
-      dbname: "{{ env_var('POSTGRES_DB', 'sme_oltp') }}"
+      host: "{{ env_var('POSTGRES_HOST', 'postgres') | trim }}"
+      port: "{{ env_var('POSTGRES_PORT_INTERNAL', '5432') | trim | int }}"
+      user: "{{ env_var('POSTGRES_USER', 'sme') | trim }}"
+      pass: "{{ env_var('POSTGRES_PASSWORD', 'sme') | trim }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'sme_oltp') | trim }}"
       schema: analytics
       threads: 4
       keepalives_idle: 0
@@ -34,11 +35,11 @@ sme_intelligence:
     # ---------------------------------------------------------------------
     ci:
       type: postgres
-      host: "{{ env_var('POSTGRES_HOST') }}"
-      port: "{{ env_var('POSTGRES_PORT_INTERNAL', '5432') | int }}"
-      user: "{{ env_var('POSTGRES_USER') }}"
-      pass: "{{ env_var('POSTGRES_PASSWORD') }}"
-      dbname: "{{ env_var('POSTGRES_DB') }}"
+      host: "{{ env_var('POSTGRES_HOST') | trim }}"
+      port: "{{ env_var('POSTGRES_PORT_INTERNAL', '5432') | trim | int }}"
+      user: "{{ env_var('POSTGRES_USER') | trim }}"
+      pass: "{{ env_var('POSTGRES_PASSWORD') | trim }}"
+      dbname: "{{ env_var('POSTGRES_DB') | trim }}"
       schema: analytics
       threads: 4
       keepalives_idle: 0
