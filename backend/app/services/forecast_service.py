@@ -13,15 +13,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.ml.demand_features import (
+    FEATURE_COLS,
+    feature_row_from_history,
+)
 from app.schemas.forecast import (
     DemandForecastPoint,
     DemandForecastResponse,
     DemandHistoryPoint,
     ForecastMetrics,
-)
-from src.features.demand_features import (  # noqa: E402 (mounted at /ml)
-    FEATURE_COLS,
-    feature_row_from_history,
 )
 
 
@@ -89,10 +89,6 @@ def _load_champion():
 def _load_history(
     db: Session, product_id: str, branch_id: str, history_days: int
 ) -> pd.DataFrame:
-    """
-    Return a full daily series (zero-filled) for (product, branch) over the
-    last `history_days` days, anchored on the latest sale date.
-    """
     if settings.warehouse_enabled:
         sql = f"""
         SELECT f.sale_date::date AS date, SUM(f.quantity)::float AS units
