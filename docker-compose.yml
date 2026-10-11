@@ -58,9 +58,11 @@ services:
     environment:
       API_ENV: ${API_ENV}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_DEMAND_MODEL_NAME: demand_forecast_xgboost
-      MLFLOW_CHAMPION_ALIAS: champion
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-}
+      MLFLOW_DEMAND_MODEL_NAME: ${MLFLOW_DEMAND_MODEL_NAME:-demand_forecast_xgboost}
+      MLFLOW_CHAMPION_ALIAS: ${MLFLOW_CHAMPION_ALIAS:-champion}
       PYTHONPATH: /app:/ml
       WAREHOUSE_ENABLED: ${WAREHOUSE_ENABLED:-false}
       WAREHOUSE_SCHEMA: ${WAREHOUSE_SCHEMA:-analytics}
@@ -97,15 +99,18 @@ services:
     container_name: sme_ml
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MLFLOW_DEMAND_MODEL_NAME: demand_forecast_xgboost
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-}
+      MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME:-}
+      MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD:-}
+      MLFLOW_DEMAND_MODEL_NAME: ${MLFLOW_DEMAND_MODEL_NAME:-demand_forecast_xgboost}
+      DAGSHUB_OWNER: ${DAGSHUB_OWNER:-syvoliamary}
+      DAGSHUB_REPO: ${DAGSHUB_REPO:-sme-intelligence}
+      DAGSHUB_USER_TOKEN: ${DAGSHUB_USER_TOKEN:-}
     volumes:
       - ./ml:/app
       - mlflow_data:/mlflow
     depends_on:
       postgres:
-        condition: service_healthy
-      mlflow:
         condition: service_healthy
     command: ["sleep", "infinity"]
 

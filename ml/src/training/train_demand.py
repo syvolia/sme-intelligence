@@ -1,7 +1,11 @@
 """
 Train the demand forecasting model and register it in MLflow.
 
+Local (logs to DagsHub-hosted MLflow):
     docker compose run --rm ml python -m src.training.train_demand
+
+The DagsHub repo is configured via env vars — see DAGSHUB_OWNER / DAGSHUB_REPO
+below. Defaults match the portfolio deployment.
 """
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import dagshub
 import mlflow
 import numpy as np
 import pandas as pd
@@ -26,11 +31,43 @@ from src.features.demand_features import (
 )
 from src.models.demand_forecaster import DemandForecaster
 
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 MODEL_NAME = os.environ.get("MLFLOW_DEMAND_MODEL_NAME", "demand_forecast_xgboost")
 EXPERIMENT = "demand_forecasting"
 CHAMPION_ALIAS = "champion"
 
+# DagsHub repo that hosts the MLflow tracking server
+DAGSHUB_OWNER = os.environ.get("DAGSHUB_OWNER", "syvoliamary")
+DAGSHUB_REPO = os.environ.get("DAGSHUB_REPO", "sme-intelligence")
+
 VAL_DAYS = 30
+
+
+# ---------------------------------------------------------------------------
+# MLflow / DagsHub setup
+# ---------------------------------------------------------------------------
+def _configure_mlflow() -> str:
+    """
+    Point MLflow at the right tracking URI.
+
+    Priority:
+      1. MLFLOW_TRACKING_URI env var (used on Render / CI)
+      2. DagsHub-hosted MLflow for the configured repo (default)
+    """
+    explicit_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if explicit_uri:
+        mlflow.set_tracking_uri(explicit_uri)
+        return explicit_uri
+
+    dagshub.init(
+        repo_owner=DAGSHUB_OWNER,
+        repo_name=DAGSHUB_REPO,
+        mlflow=True,
+    )
+    return mlflow.get_tracking_uri()
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +126,9 @@ def build_full_panel(demand: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-    mlflow.set_tracking_uri(tracking_uri)
+    tracking_uri = _configure_mlflow()
+    print(f"→ MLflow tracking URI: {tracking_uri}")
+
     mlflow.set_experiment(EXPERIMENT)
 
     db_url = os.environ["DATABASE_URL"]
@@ -125,7 +163,7 @@ def main() -> None:
     }
     encoded = encode_frame(features, product_map, branch_map, category_map)
 
-    # Train/val split -------------------------------------------------------
+    # Train / val split -----------------------------------------------------
     cutoff = encoded["date"].max() - pd.Timedelta(days=VAL_DAYS)
     train = encoded[encoded["date"] < cutoff]
     val = encoded[encoded["date"] >= cutoff]
@@ -151,7 +189,7 @@ def main() -> None:
         mlflow.log_param("train_rows", len(train))
         mlflow.log_param("val_rows", len(val))
 
-        # ---- train three quantile boosters --------------------------------
+        # ---- Train three quantile boosters ---------------------------------
         models: dict[str, xgb.XGBRegressor] = {}
         for name, alpha in (("q10", 0.1), ("q50", 0.5), ("q90", 0.9)):
             print(f"→ training {name} (alpha={alpha})")
@@ -163,7 +201,7 @@ def main() -> None:
             m.fit(X_train, y_train)
             models[name] = m
 
-        # ---- metrics on the median model ----------------------------------
+        # ---- Metrics on the median model -----------------------------------
         y_pred = models["q50"].predict(X_val)
         mae = float(mean_absolute_error(y_val, y_pred))
         rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
@@ -176,7 +214,7 @@ def main() -> None:
         print(f"→ val   MAE={mae:.4f}   RMSE={rmse:.4f}   MAPE={mape:.4f}")
         mlflow.log_metrics({"mae": mae, "rmse": rmse, "mape": mape})
 
-        # ---- persist + log model ------------------------------------------
+        # ---- Persist + log model -------------------------------------------
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             artifacts: dict[str, str] = {}
@@ -213,13 +251,14 @@ def main() -> None:
                 ],
             )
 
-        # ---- promote latest version to champion ---------------------------
+        # ---- Promote latest version to champion ----------------------------
         client = MlflowClient()
         versions = client.search_model_versions(f"name='{MODEL_NAME}'")
         latest = max(versions, key=lambda v: int(v.version))
         client.set_registered_model_alias(MODEL_NAME, CHAMPION_ALIAS, latest.version)
         print(f"→ promoted version {latest.version} → alias '{CHAMPION_ALIAS}'")
         print(f"→ run id: {run.info.run_id}")
+        print(f"→ view at: {tracking_uri}/#/experiments/{run.info.experiment_id}/runs/{run.info.run_id}")
 
 
 if __name__ == "__main__":
